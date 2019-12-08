@@ -159,6 +159,7 @@ class BertModelTest(tf.test.TestCase):
 
     return tf.constant(value=values, dtype=tf.int32, shape=shape, name=name)
 
+  # 只有这个函数是用来运行测试的
   def assert_all_tensors_reachable(self, sess, outputs):
     """Checks that all the tensors in the graph are reachable from outputs."""
     graph = sess.graph
