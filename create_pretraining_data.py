@@ -64,6 +64,15 @@ flags.DEFINE_float(
     "Probability of creating sequences which are shorter than the "
     "maximum length.")
 
+"""
+dupe_factor： 重复参数，即对于同一个句子，我们可以设置不同位置的【MASK】次数。比如对于句子Hello world, this is bert.，
+为了充分利用数据，第一次可以mask成Hello [MASK], this is bert.，第二次可以变成Hello world, this is [MASK[.
+max_predictions_per_seq： 一个句子里最多有多少个[MASK]标记
+masked_lm_prob： 多少比例的Token被MASK掉
+short_seq_prob：  长度小于“max_seq_length”的样本比例。
+因为在fine-tune过程里面输入的target_seq_length是可变的（小于等于max_seq_length），
+那么为了防止过拟合也需要在pre-train的过程当中构造一些短的样本。
+"""
 
 class TrainingInstance(object):
   """A single training instance (sentence pair)."""
@@ -105,10 +114,11 @@ def write_instance_to_example_files(instances, tokenizer, max_seq_length,
   total_written = 0
   for (inst_index, instance) in enumerate(instances):
     input_ids = tokenizer.convert_tokens_to_ids(instance.tokens)
-    input_mask = [1] * len(input_ids)
-    segment_ids = list(instance.segment_ids)
+    input_mask = [1] * len(input_ids) # 输入字符的mask
+    segment_ids = list(instance.segment_ids) # "11111222222"
     assert len(input_ids) <= max_seq_length
 
+    # 不足长度补0
     while len(input_ids) < max_seq_length:
       input_ids.append(0)
       input_mask.append(0)
@@ -127,6 +137,7 @@ def write_instance_to_example_files(instances, tokenizer, max_seq_length,
       masked_lm_ids.append(0)
       masked_lm_weights.append(0.0)
 
+    # 下一句是否是随机的
     next_sentence_label = 1 if instance.is_random_next else 0
 
     features = collections.OrderedDict()
@@ -140,11 +151,13 @@ def write_instance_to_example_files(instances, tokenizer, max_seq_length,
 
     tf_example = tf.train.Example(features=tf.train.Features(feature=features))
 
+    # 每个样本分别写入不同的文件中
     writers[writer_index].write(tf_example.SerializeToString())
     writer_index = (writer_index + 1) % len(writers)
 
     total_written += 1
 
+    # 打印部分样本
     if inst_index < 20:
       tf.logging.info("*** Example ***")
       tf.logging.info("tokens: %s" % " ".join(
@@ -186,8 +199,12 @@ def create_training_instances(input_files, tokenizer, max_seq_length,
   # (1) One sentence per line. These should ideally be actual sentences, not
   # entire paragraphs or arbitrary spans of text. (Because we use the
   # sentence boundaries for the "next sentence prediction" task).
+  #
   # (2) Blank lines between documents. Document boundaries are needed so
   # that the "next sentence prediction" task doesn't span between documents.
+  #
+  # all_documents是list的list，第一层list表示document，
+  # 第二层lit表示document里的多个句子。
   for input_file in input_files:
     with tf.gfile.GFile(input_file, "r") as reader:
       while True:
@@ -197,6 +214,7 @@ def create_training_instances(input_files, tokenizer, max_seq_length,
         line = line.strip()
 
         # Empty lines are used as document delimiters
+        # 空行表示文档分割
         if not line:
           all_documents.append([])
         tokens = tokenizer.tokenize(line)
@@ -204,9 +222,11 @@ def create_training_instances(input_files, tokenizer, max_seq_length,
           all_documents[-1].append(tokens)
 
   # Remove empty documents
+  # 删除空文档
   all_documents = [x for x in all_documents if x]
   rng.shuffle(all_documents)
 
+  # 重复dupe_factor次, 直接对文档进行重复采样
   vocab_words = list(tokenizer.vocab.keys())
   instances = []
   for _ in range(dupe_factor):
@@ -220,6 +240,7 @@ def create_training_instances(input_files, tokenizer, max_seq_length,
   return instances
 
 
+# 从一个文档中抽取多个训练样本。
 def create_instances_from_document(
     all_documents, document_index, max_seq_length, short_seq_prob,
     masked_lm_prob, max_predictions_per_seq, vocab_words, rng):
@@ -237,6 +258,7 @@ def create_instances_from_document(
   # The `target_seq_length` is just a rough target however, whereas
   # `max_seq_length` is a hard limit.
   target_seq_length = max_num_tokens
+  # 以short_seq_prob的概率随机生成（2~max_num_tokens）的长度
   if rng.random() < short_seq_prob:
     target_seq_length = rng.randint(2, max_num_tokens)
 
@@ -253,11 +275,13 @@ def create_instances_from_document(
     segment = document[i]
     current_chunk.append(segment)
     current_length += len(segment)
+    # 将句子依次加入current_chunk中，直到加完或者达到限制的最大长度
     if i == len(document) - 1 or current_length >= target_seq_length:
       if current_chunk:
         # `a_end` is how many segments from `current_chunk` go into the `A`
         # (first) sentence.
         a_end = 1
+        # 随机选取切分边界
         if len(current_chunk) >= 2:
           a_end = rng.randint(1, len(current_chunk) - 1)
 
@@ -266,6 +290,7 @@ def create_instances_from_document(
           tokens_a.extend(current_chunk[j])
 
         tokens_b = []
+        # 是否随机next
         # Random next
         is_random_next = False
         if len(current_chunk) == 1 or rng.random() < 0.5:
@@ -433,6 +458,11 @@ def truncate_seq_pair(tokens_a, tokens_b, max_num_tokens, rng):
       trunc_tokens.pop()
 
 
+"""
+构造tokenizer对输入语料进行分词处理（Tokenizer部分会在后续说明）
+经过create_training_instances函数构造训练instance
+调用write_instance_to_example_files函数以TFRecord格式保存数据
+"""
 def main(_):
   tf.logging.set_verbosity(tf.logging.INFO)
 

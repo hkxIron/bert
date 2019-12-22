@@ -40,7 +40,7 @@ def validate_case_matches_checkpoint(do_lower_case, init_checkpoint):
   if m is None:
     return
 
-  model_name = m.group(1)
+  model_name = m.group(1) # 获取模型名称
 
   lower_models = [
       "uncased_L-24_H-1024_A-16", "uncased_L-12_H-768_A-12",
@@ -78,9 +78,9 @@ def validate_case_matches_checkpoint(do_lower_case, init_checkpoint):
 def convert_to_unicode(text):
   """Converts `text` to Unicode (if it's not already), assuming utf-8 input."""
   if six.PY3:
-    if isinstance(text, str):
+    if isinstance(text, str): # python3默认为unicode,直接返回
       return text
-    elif isinstance(text, bytes):
+    elif isinstance(text, bytes): # bytes需要从utf8格式解码
       return text.decode("utf-8", "ignore")
     else:
       raise ValueError("Unsupported string type: %s" % (type(text)))
@@ -119,18 +119,26 @@ def printable_text(text):
 
 
 def load_vocab(vocab_file):
-  """Loads a vocabulary file into a dictionary."""
-  vocab = collections.OrderedDict()
+  """
+  Loads a vocabulary file into a dictionary.
+
+  format:
+      look
+      has
+      ...
+
+  """
+  token_to_id_vocab = collections.OrderedDict()
   index = 0
   with tf.gfile.GFile(vocab_file, "r") as reader:
     while True:
-      token = convert_to_unicode(reader.readline())
+      token = convert_to_unicode(reader.readline()) # 每次读取一行
       if not token:
         break
       token = token.strip()
-      vocab[token] = index
+      token_to_id_vocab[token] = index
       index += 1
-  return vocab
+  return token_to_id_vocab
 
 
 def convert_by_vocab(vocab, items):
@@ -154,13 +162,14 @@ def whitespace_tokenize(text):
   text = text.strip()
   if not text:
     return []
-  tokens = text.split()
+  tokens = text.split() #直接用空格分格
   return tokens
 
 
 class FullTokenizer(object):
   """Runs end-to-end tokenziation."""
 
+  # 加载词表文件为字典形式
   def __init__(self, vocab_file, do_lower_case=True):
     self.vocab = load_vocab(vocab_file)
     self.inv_vocab = {v: k for k, v in self.vocab.items()}
@@ -169,7 +178,9 @@ class FullTokenizer(object):
 
   def tokenize(self, text):
     split_tokens = []
+    # 粗粒度分词
     for token in self.basic_tokenizer.tokenize(text):
+      # 细粒度分词
       for sub_token in self.wordpiece_tokenizer.tokenize(token):
         split_tokens.append(sub_token)
 
@@ -253,7 +264,7 @@ class BasicTokenizer(object):
     output = []
     for char in text:
       cp = ord(char)
-      if self._is_chinese_char(cp):
+      if self._is_chinese_char(cp):# 直接在中文字符两边加" "
         output.append(" ")
         output.append(char)
         output.append(" ")
@@ -287,8 +298,8 @@ class BasicTokenizer(object):
     """Performs invalid character removal and whitespace cleanup on text."""
     output = []
     for char in text:
-      cp = ord(char)
-      if cp == 0 or cp == 0xfffd or _is_control(char):
+      cp = ord(char) # 获取unicode编码
+      if cp == 0 or cp == 0xfffd or _is_control(char): # 控制字符直接忽略
         continue
       if _is_whitespace(char):
         output.append(" ")
@@ -308,7 +319,7 @@ class WordpieceTokenizer(object):
   def tokenize(self, text):
     """Tokenizes a piece of text into its word pieces.
 
-    This uses a greedy longest-match-first algorithm to perform tokenization
+    This uses a greedy longest-match-first algorithm (使用贪心的最大正向匹配算法)to perform tokenization
     using the given vocabulary.
 
     For example:
@@ -321,13 +332,23 @@ class WordpieceTokenizer(object):
 
     Returns:
       A list of wordpiece tokens.
+
+
+    我们用一个例子来看代码的执行过程。比如假设输入是”unaffable”。
+    我们跳到while循环部分，这是start=0，end=len(chars)=9，
+    也就是先看看unaffable在不在词典里，如果在，那么直接作为一个WordPiece，
+    如果不在，那么end-=1，也就是看unaffabl在不在词典里，最终发现”un”在词典里，把un加到结果里。
+
+    接着start=2，看affable在不在，不在再看affabl，…，
+    最后发现 ##aff 在词典里。注意：##表示这个词是接着前面的，
+    这样使得WordPiece切分是可逆的——我们可以恢复出“真正”的词。
     """
 
     text = convert_to_unicode(text)
 
     output_tokens = []
-    for token in whitespace_tokenize(text):
-      chars = list(token)
+    for token in whitespace_tokenize(text): # 用空格分割字符串
+      chars = list(token) # 得到里面的char, 如"hello" -> [h,e,l,l,o]
       if len(chars) > self.max_input_chars_per_word:
         output_tokens.append(self.unk_token)
         continue
@@ -338,7 +359,7 @@ class WordpieceTokenizer(object):
       while start < len(chars):
         end = len(chars)
         cur_substr = None
-        while start < end:
+        while start < end:# 每次去掉最后的一个char去看是否在词典里
           substr = "".join(chars[start:end])
           if start > 0:
             substr = "##" + substr
@@ -378,11 +399,12 @@ def _is_control(char):
   if char == "\t" or char == "\n" or char == "\r":
     return False
   cat = unicodedata.category(char)
-  if cat in ("Cc", "Cf"):
+  if cat in ("Cc", "Cf"): # is control char
     return True
   return False
 
 
+# 判断是否为标点符号
 def _is_punctuation(char):
   """Checks whether `chars` is a punctuation character."""
   cp = ord(char)

@@ -129,8 +129,14 @@ class BertModel(object):
     input_ids=input_ids, input_mask=input_mask, token_type_ids=token_type_ids)
 
   label_embeddings = tf.get_variable(...)
+
+  #得到最后一层的第一个Token也就是[CLS]向量表示，可以看成是一个句子的embedding
   pooled_output = model.get_pooled_output()
   logits = tf.matmul(pooled_output, label_embeddings)
+
+
+  总结一下:transformer就是
+  embedding --> N *[multi-head attention --> Add(Residual) &Norm–> Feed-Forward(intermedian) --> Add(Residual) &Norm]
   ...
   ```
   """
