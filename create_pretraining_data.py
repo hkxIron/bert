@@ -115,7 +115,7 @@ def write_instance_to_example_files(instances, tokenizer, max_seq_length,
   for (inst_index, instance) in enumerate(instances):
     input_ids = tokenizer.convert_tokens_to_ids(instance.tokens)
     input_mask = [1] * len(input_ids) # 输入字符的mask
-    segment_ids = list(instance.segment_ids) # "11111222222"
+    segment_ids = list(instance.segment_ids) # "000011111"
     assert len(input_ids) <= max_seq_length
 
     # 不足长度补0
@@ -158,10 +158,12 @@ def write_instance_to_example_files(instances, tokenizer, max_seq_length,
     total_written += 1
 
     # 打印部分样本
-    if inst_index < 20:
+    if inst_index < 5:
       tf.logging.info("*** Example ***")
       tf.logging.info("tokens: %s" % " ".join(
           [tokenization.printable_text(x) for x in instance.tokens]))
+      tf.logging.info("labels: %s" % " ".join(
+        [tokenization.printable_text(x) for x in instance.masked_lm_labels]))
 
       for feature_name in features.keys():
         feature = features[feature_name]
@@ -196,10 +198,12 @@ def create_training_instances(input_files, tokenizer, max_seq_length,
   all_documents = [[]]
 
   # Input file format:
+  # 每行是一个句子,每个句子就是一个doc
   # (1) One sentence per line. These should ideally be actual sentences, not
   # entire paragraphs or arbitrary spans of text. (Because we use the
   # sentence boundaries for the "next sentence prediction" task).
   #
+  # 不同的doc之间必须有空行分隔
   # (2) Blank lines between documents. Document boundaries are needed so
   # that the "next sentence prediction" task doesn't span between documents.
   #
@@ -217,6 +221,7 @@ def create_training_instances(input_files, tokenizer, max_seq_length,
         # 空行表示文档分割
         if not line:
           all_documents.append([])
+        # 中文直接按char分隔
         tokens = tokenizer.tokenize(line)
         if tokens:
           all_documents[-1].append(tokens)
@@ -224,17 +229,18 @@ def create_training_instances(input_files, tokenizer, max_seq_length,
   # Remove empty documents
   # 删除空文档
   all_documents = [x for x in all_documents if x]
-  rng.shuffle(all_documents)
+  rng.shuffle(all_documents) # 将文档的顺序打乱
 
   # 重复dupe_factor次, 直接对文档进行重复采样
   vocab_words = list(tokenizer.vocab.keys())
   instances = []
   for _ in range(dupe_factor):
     for document_index in range(len(all_documents)):
-      instances.extend(
-          create_instances_from_document(
-              all_documents, document_index, max_seq_length, short_seq_prob,
-              masked_lm_prob, max_predictions_per_seq, vocab_words, rng))
+      inst = create_instances_from_document(
+        all_documents, document_index, max_seq_length, short_seq_prob,
+        masked_lm_prob, max_predictions_per_seq, vocab_words, rng
+      )
+      instances.extend(inst)
 
   rng.shuffle(instances)
   return instances
@@ -245,9 +251,11 @@ def create_instances_from_document(
     all_documents, document_index, max_seq_length, short_seq_prob,
     masked_lm_prob, max_predictions_per_seq, vocab_words, rng):
   """Creates `TrainingInstance`s for a single document."""
+  # 当前的文档
   document = all_documents[document_index]
 
   # Account for [CLS], [SEP], [SEP]
+  # 预留三个token给 cls, sep, sep
   max_num_tokens = max_seq_length - 3
 
   # We *usually* want to fill up the entire sequence since we are padding
@@ -291,6 +299,7 @@ def create_instances_from_document(
 
         tokens_b = []
         # 是否随机next
+
         # Random next
         is_random_next = False
         if len(current_chunk) == 1 or rng.random() < 0.5:
@@ -303,11 +312,12 @@ def create_instances_from_document(
           # we're processing.
           for _ in range(10):
             random_document_index = rng.randint(0, len(all_documents) - 1)
-            if random_document_index != document_index:
-              break
+            if random_document_index != document_index: break
 
+          # 随机选一个doc(即一个sentence),然后从中选一个片段
           random_document = all_documents[random_document_index]
           random_start = rng.randint(0, len(random_document) - 1)
+
           for j in range(random_start, len(random_document)):
             tokens_b.extend(random_document[j])
             if len(tokens_b) >= target_b_length:
@@ -316,42 +326,59 @@ def create_instances_from_document(
           # they don't go to waste.
           num_unused_segments = len(current_chunk) - a_end
           i -= num_unused_segments
+
         # Actual next
         else:
           is_random_next = False
           for j in range(a_end, len(current_chunk)):
             tokens_b.extend(current_chunk[j])
+        # 截断到指定长度
         truncate_seq_pair(tokens_a, tokens_b, max_num_tokens, rng)
 
         assert len(tokens_a) >= 1
         assert len(tokens_b) >= 1
 
+        # tokens : [CLS]句子A [SEP] 句子B [SEP]
+        # seg_ids: 0    0 0 0 0     1 11 1
         tokens = []
         segment_ids = []
+        # token序列开始符:CLS
         tokens.append("[CLS]")
         segment_ids.append(0)
+        # 加入句子a的所有序列
         for token in tokens_a:
           tokens.append(token)
           segment_ids.append(0)
 
+        # 加入分隔符
         tokens.append("[SEP]")
-        segment_ids.append(0)
+        segment_ids.append(0) # 注意:此处分隔符当成句子token=0
 
+        # 加入句子b的所有序列
         for token in tokens_b:
           tokens.append(token)
           segment_ids.append(1)
-        tokens.append("[SEP]")
-        segment_ids.append(1)
 
-        (tokens, masked_lm_positions,
-         masked_lm_labels) = create_masked_lm_predictions(
-             tokens, masked_lm_prob, max_predictions_per_seq, vocab_words, rng)
+        # 加入分隔符
+        tokens.append("[SEP]")
+        segment_ids.append(1) # 注意:此处分隔符当成句子token=1
+
+        # 加入随机[MASK]
+        (tokens,
+         masked_lm_positions,
+         masked_lm_labels) = create_masked_lm_predictions(tokens,
+                                                          masked_lm_prob,
+                                                          max_predictions_per_seq,
+                                                          vocab_words,
+                                                          rng)
+
         instance = TrainingInstance(
             tokens=tokens,
             segment_ids=segment_ids,
             is_random_next=is_random_next,
             masked_lm_positions=masked_lm_positions,
             masked_lm_labels=masked_lm_labels)
+
         instances.append(instance)
       current_chunk = []
       current_length = 0
@@ -370,7 +397,7 @@ def create_masked_lm_predictions(tokens, masked_lm_prob,
 
   cand_indexes = []
   for (i, token) in enumerate(tokens):
-    if token == "[CLS]" or token == "[SEP]":
+    if token == "[CLS]" or token == "[SEP]": # [CLS], [SEP] 不作mask
       continue
     # Whole Word Masking means that if we mask all of the wordpieces
     # corresponding to an original word. When a word has been split into
@@ -410,6 +437,8 @@ def create_masked_lm_predictions(tokens, masked_lm_prob,
         break
     if is_any_index_covered:
       continue
+
+    # 随机mask
     for index in index_set:
       covered_indexes.add(index)
 
@@ -426,20 +455,23 @@ def create_masked_lm_predictions(tokens, masked_lm_prob,
           masked_token = vocab_words[rng.randint(0, len(vocab_words) - 1)]
 
       output_tokens[index] = masked_token
+      # 即80%时利用mask预测label,10%利用label自己预测,10%利用随机字符预测
+      masked_lms.append(MaskedLmInstance(index=index, label=tokens[index])) # label是真正原始的token
 
-      masked_lms.append(MaskedLmInstance(index=index, label=tokens[index]))
   assert len(masked_lms) <= num_to_predict
+  # 重新按原始顺序排序
   masked_lms = sorted(masked_lms, key=lambda x: x.index)
 
   masked_lm_positions = []
   masked_lm_labels = []
   for p in masked_lms:
-    masked_lm_positions.append(p.index)
-    masked_lm_labels.append(p.label)
+    masked_lm_positions.append(p.index) # 出现mask的地方的position_index
+    masked_lm_labels.append(p.label) # 以及出现mask的地方的label
 
   return (output_tokens, masked_lm_positions, masked_lm_labels)
 
 
+# 对tokens_a, tokens_b截断到指定长度
 def truncate_seq_pair(tokens_a, tokens_b, max_num_tokens, rng):
   """Truncates a pair of sequences to a maximum sequence length."""
   while True:
@@ -466,6 +498,7 @@ def truncate_seq_pair(tokens_a, tokens_b, max_num_tokens, rng):
 def main(_):
   tf.logging.set_verbosity(tf.logging.INFO)
 
+  # 分词器
   tokenizer = tokenization.FullTokenizer(
       vocab_file=FLAGS.vocab_file, do_lower_case=FLAGS.do_lower_case)
 

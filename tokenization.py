@@ -180,7 +180,7 @@ class FullTokenizer(object):
     split_tokens = []
     # 粗粒度分词
     for token in self.basic_tokenizer.tokenize(text):
-      # 细粒度分词
+      # 对粗粒度分词的结果进行细粒度分词
       for sub_token in self.wordpiece_tokenizer.tokenize(token):
         split_tokens.append(sub_token)
 

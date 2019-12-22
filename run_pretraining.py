@@ -136,11 +136,14 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
         token_type_ids=segment_ids,
         use_one_hot_embeddings=use_one_hot_embeddings)
 
+    # masked_language_model
+    # sequence_output:[batch_size, seq_length, hidden_size]
+    # embedding_table: [vocab_size, embedding_size]
     (masked_lm_loss,
      masked_lm_example_loss, masked_lm_log_probs) = get_masked_lm_output(
          bert_config, model.get_sequence_output(), model.get_embedding_table(),
          masked_lm_positions, masked_lm_ids, masked_lm_weights)
-
+    # next_sentence_prediction
     (next_sentence_loss, next_sentence_example_loss,
      next_sentence_log_probs) = get_next_sentence_output(
          bert_config, model.get_pooled_output(), next_sentence_labels)
@@ -239,6 +242,8 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
 
 def get_masked_lm_output(bert_config, input_tensor, output_weights, positions,
                          label_ids, label_weights):
+  # input_tensor:[batch_size, seq_length, hidden_size]
+  # output_weights: [vocab_size, embedding_size]
   """Get loss and log probs for the masked LM."""
   input_tensor = gather_indexes(input_tensor, positions)
 
@@ -246,27 +251,39 @@ def get_masked_lm_output(bert_config, input_tensor, output_weights, positions,
     # We apply one more non-linear transformation before the output layer.
     # This matrix is not used after pre-training.
     with tf.variable_scope("transform"):
+      # new input_tensor:[batch_size, seq_length, hidden_size]
       input_tensor = tf.layers.dense(
           input_tensor,
           units=bert_config.hidden_size,
           activation=modeling.get_activation(bert_config.hidden_act),
-          kernel_initializer=modeling.create_initializer(
-              bert_config.initializer_range))
+          kernel_initializer=modeling.create_initializer(bert_config.initializer_range))
+      # new input_tensor:[batch_size, seq_length, hidden_size]
       input_tensor = modeling.layer_norm(input_tensor)
 
     # The output weights are the same as the input embeddings, but there is
     # an output-only bias for each token.
+    # output_bias:[vocab_size,]
     output_bias = tf.get_variable(
         "output_bias",
         shape=[bert_config.vocab_size],
         initializer=tf.zeros_initializer())
+
+    # input_tensor:[batch_size, seq_length, hidden_size]
+    # output weights: [vocab_size, embedding_size=hidden_size]
+    # logits:[batch_size, vocab_size]
     logits = tf.matmul(input_tensor, output_weights, transpose_b=True)
+    # output_bias:[vocab_size]
     logits = tf.nn.bias_add(logits, output_bias)
+    # log_probs:[batch_size, vocab_size]
     log_probs = tf.nn.log_softmax(logits, axis=-1)
 
+    #label_ids:[batch_size, ]
+    #new label_ids:[batch_size, 1]
     label_ids = tf.reshape(label_ids, [-1])
+    #new label_weights:[batch_size, 1]
     label_weights = tf.reshape(label_weights, [-1])
 
+    # one_hot_labels:[batch_size, vocab_size]
     one_hot_labels = tf.one_hot(
         label_ids, depth=bert_config.vocab_size, dtype=tf.float32)
 
@@ -274,9 +291,16 @@ def get_masked_lm_output(bert_config, input_tensor, output_weights, positions,
     # short to have the maximum number of predictions). The `label_weights`
     # tensor has a value of 1.0 for every real prediction and 0.0 for the
     # padding predictions.
+
+    # log_probs:[batch_size, vocab_size]
+    # one_hot_labels:[batch_size, vocab_size]
+    # per_example_loss:[batch_size,]
     per_example_loss = -tf.reduce_sum(log_probs * one_hot_labels, axis=[-1])
+    # 乘以样本权重
+    #label_weights:[batch_size, 1]
     numerator = tf.reduce_sum(label_weights * per_example_loss)
     denominator = tf.reduce_sum(label_weights) + 1e-5
+    # 样本权重归一化后的loss
     loss = numerator / denominator
 
   return (loss, per_example_loss, log_probs)
@@ -310,13 +334,15 @@ def gather_indexes(sequence_tensor, positions):
   sequence_shape = modeling.get_shape_list(sequence_tensor, expected_rank=3)
   batch_size = sequence_shape[0]
   seq_length = sequence_shape[1]
-  width = sequence_shape[2]
+  width = sequence_shape[2] # embedding_dim
 
   flat_offsets = tf.reshape(
-      tf.range(0, batch_size, dtype=tf.int32) * seq_length, [-1, 1])
+      tf.range(0, limit=batch_size, dtype=tf.int32) * seq_length, [-1, 1])
   flat_positions = tf.reshape(positions + flat_offsets, [-1])
+  # flat_sequence_tensor: [batch_size*seq_length, width]
   flat_sequence_tensor = tf.reshape(sequence_tensor,
                                     [batch_size * seq_length, width])
+  # output_tensor: [batch_size*seq_length, width]
   output_tensor = tf.gather(flat_sequence_tensor, flat_positions)
   return output_tensor
 
