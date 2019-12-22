@@ -122,6 +122,7 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
     input_mask = features["input_mask"]
     segment_ids = features["segment_ids"]
     masked_lm_positions = features["masked_lm_positions"]
+    # 即由masked_lm_labels得来,是真正的要预测的label
     masked_lm_ids = features["masked_lm_ids"]
     masked_lm_weights = features["masked_lm_weights"]
     next_sentence_labels = features["next_sentence_labels"]
@@ -139,6 +140,9 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
     # masked_language_model
     # sequence_output:[batch_size, seq_length, hidden_size]
     # embedding_table: [vocab_size, embedding_size]
+    # masked_lm_positions:[batch_size, mask_num]
+    # masked_lm_ids:[batch_size, mask_num], label_ids
+    # masked_lm_weights:[batch_size, mask_num]
     (masked_lm_loss,
      masked_lm_example_loss, masked_lm_log_probs) = get_masked_lm_output(
          bert_config, model.get_sequence_output(), model.get_embedding_table(),
