@@ -125,6 +125,7 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
     # 即由masked_lm_labels得来,是真正的要预测的label
     masked_lm_ids = features["masked_lm_ids"]
     masked_lm_weights = features["masked_lm_weights"]
+    # next_sentence_labels:[batch_size,]
     next_sentence_labels = features["next_sentence_labels"]
 
     is_training = (mode == tf.estimator.ModeKeys.TRAIN)
@@ -147,6 +148,7 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
      masked_lm_example_loss, masked_lm_log_probs) = get_masked_lm_output(
          bert_config, model.get_sequence_output(), model.get_embedding_table(),
          masked_lm_positions, masked_lm_ids, masked_lm_weights)
+
     # next_sentence_prediction
     (next_sentence_loss, next_sentence_example_loss,
      next_sentence_log_probs) = get_next_sentence_output(
@@ -159,8 +161,7 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
     initialized_variable_names = {}
     scaffold_fn = None
     if init_checkpoint:
-      (assignment_map, initialized_variable_names
-      ) = modeling.get_assignment_map_from_checkpoint(tvars, init_checkpoint)
+      (assignment_map, initialized_variable_names) = modeling.get_assignment_map_from_checkpoint(tvars, init_checkpoint)
       if use_tpu:
 
         def tpu_scaffold():
@@ -216,8 +217,7 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
         next_sentence_labels = tf.reshape(next_sentence_labels, [-1])
         next_sentence_accuracy = tf.metrics.accuracy(
             labels=next_sentence_labels, predictions=next_sentence_predictions)
-        next_sentence_mean_loss = tf.metrics.mean(
-            values=next_sentence_example_loss)
+        next_sentence_mean_loss = tf.metrics.mean(values=next_sentence_example_loss)
 
         return {
             "masked_lm_accuracy": masked_lm_accuracy,
@@ -231,6 +231,7 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
           masked_lm_weights, next_sentence_example_loss,
           next_sentence_log_probs, next_sentence_labels
       ])
+
       output_spec = tf.contrib.tpu.TPUEstimatorSpec(
           mode=mode,
           loss=total_loss,
@@ -299,12 +300,12 @@ def get_masked_lm_output(bert_config, input_tensor, output_weights, positions,
     # tensor has a value of 1.0 for every real prediction and 0.0 for the
     # padding predictions.
 
-    # log_probs:[batch_size, vocab_size]
-    # one_hot_labels:[batch_size, vocab_size]
-    # per_example_loss:[batch_size,]
+    # log_probs:[batch_size*mask_num, vocab_size]
+    # one_hot_labels:[batch_size*mask_num, vocab_size]
+    # per_example_loss:[batch_size*mask,]
     per_example_loss = -tf.reduce_sum(log_probs * one_hot_labels, axis=[-1])
     # 乘以样本权重
-    #label_weights:[batch_size, 1]
+    #label_weights:[batch_size*mask, 1]
     numerator = tf.reduce_sum(label_weights * per_example_loss)
     denominator = tf.reduce_sum(label_weights) + 1e-5
     # 样本权重归一化后的loss
@@ -316,22 +317,37 @@ def get_masked_lm_output(bert_config, input_tensor, output_weights, positions,
 def get_next_sentence_output(bert_config, input_tensor, labels):
   """Get loss and log probs for the next sentence prediction."""
 
+  # input_tensor: [batch_size, hidden_size]
+  # labels:[batch_size,]
+
   # Simple binary classification. Note that 0 is "next sentence" and 1 is
   # "random sentence". This weight matrix is not used after pre-training.
   with tf.variable_scope("cls/seq_relationship"):
+    # output_weights:[2, hidden_size]
     output_weights = tf.get_variable(
         "output_weights",
         shape=[2, bert_config.hidden_size],
         initializer=modeling.create_initializer(bert_config.initializer_range))
+    # output_bias:[2]
     output_bias = tf.get_variable(
         "output_bias", shape=[2], initializer=tf.zeros_initializer())
 
+    # input_tensor: [batch_size,  hidden_size]
+    # output_weights:[2, hidden_size]
+    # logits:[batch_size,  2]
     logits = tf.matmul(input_tensor, output_weights, transpose_b=True)
+    # logits:[batch_size, 2]
     logits = tf.nn.bias_add(logits, output_bias)
+    # log_logits:[batch_size, 2]
     log_probs = tf.nn.log_softmax(logits, axis=-1)
+    # labels:[batch_size]
     labels = tf.reshape(labels, [-1])
+    # one_hot_labels:[batch_size, 2]
+    # log_logits:[batch_size, 2]
     one_hot_labels = tf.one_hot(labels, depth=2, dtype=tf.float32)
+    # per_example_loss:[batch_size]
     per_example_loss = -tf.reduce_sum(one_hot_labels * log_probs, axis=-1)
+    # loss:scalar
     loss = tf.reduce_mean(per_example_loss)
     return (loss, per_example_loss, log_probs)
 
