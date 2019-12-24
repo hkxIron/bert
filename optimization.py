@@ -140,7 +140,7 @@ class AdamWeightDecayOptimizer(tf.train.Optimizer):
       # the correct way of using L2 regularization/weight decay with Adam,
       # since that will interact with the m and v parameters in strange ways.
       #
-      # Instead we want ot decay the weights in a manner that doesn't interact
+      # Instead we want to decay the weights in a manner that doesn't interact
       # with the m/v parameters. This is equivalent to adding the square
       # of the weights to the loss with plain (non-momentum) SGD.
       if self._do_use_weight_decay(param_name):
@@ -148,22 +148,24 @@ class AdamWeightDecayOptimizer(tf.train.Optimizer):
 
       update_with_lr = self.learning_rate * update
 
-      next_param = param - update_with_lr
+      next_param = param - update_with_lr # 更新params
 
       assignments.extend(
           [param.assign(next_param),
-           m.assign(next_m),
-           v.assign(next_v)])
+           m.assign(next_m), # 更新m
+           v.assign(next_v)]) # 更新v
     return tf.group(*assignments, name=name)
 
   def _do_use_weight_decay(self, param_name):
     """Whether to use L2 weight decay for `param_name`."""
     if not self.weight_decay_rate:
       return False
+
     if self.exclude_from_weight_decay:
       for r in self.exclude_from_weight_decay:
         if re.search(r, param_name) is not None:
           return False
+
     return True
 
   def _get_variable_name(self, param_name):

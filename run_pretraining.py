@@ -144,12 +144,19 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
     # masked_lm_positions:[batch_size, mask_num]
     # masked_lm_ids:[batch_size, mask_num], label_ids
     # masked_lm_weights:[batch_size, mask_num]
+    #
+    # masked_lm_loss:scalar
+    # masked_lm_example_loss:[batch_size*mask,]
+    # masked_lm_log_probs:[batch_size*mask_num, vocab_size]
     (masked_lm_loss,
      masked_lm_example_loss, masked_lm_log_probs) = get_masked_lm_output(
          bert_config, model.get_sequence_output(), model.get_embedding_table(),
          masked_lm_positions, masked_lm_ids, masked_lm_weights)
 
     # next_sentence_prediction
+    # next_sentence_loss:scalar
+    # next_sentence_example_loss:[batch_size]
+    # next_sentence_log_probs:[batch_size, 2]
     (next_sentence_loss, next_sentence_example_loss,
      next_sentence_log_probs) = get_next_sentence_output(
          bert_config, model.get_pooled_output(), next_sentence_labels)
@@ -196,27 +203,45 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
                     masked_lm_weights, next_sentence_example_loss,
                     next_sentence_log_probs, next_sentence_labels):
         """Computes the loss and accuracy of the model."""
+        # masked_lm_log_probs:[batch_size*mask_num, vocab_size]
         masked_lm_log_probs = tf.reshape(masked_lm_log_probs,
                                          [-1, masked_lm_log_probs.shape[-1]])
+        # masked_lm_log_probs:[batch_size*mask_num, vocab_size]
+        # masked_lm_predictions:[batch_size*mask_num]
         masked_lm_predictions = tf.argmax(
             masked_lm_log_probs, axis=-1, output_type=tf.int32)
+
+        # masked_lm_example_loss:[batch_size*mask_num,]
         masked_lm_example_loss = tf.reshape(masked_lm_example_loss, [-1])
+
+        # masked_lm_ids:[batch_size, mask_num], label_ids
+        # => masked_lm_ids:[batch_size*mask_num]
         masked_lm_ids = tf.reshape(masked_lm_ids, [-1])
+
+        # masked_lm_ids:[batch_size*mask_num]
+        # masked_lm_predictions:[batch_size*mask_num,]
+        # masked_lm_weights:[batch_size*mask_num]
         masked_lm_weights = tf.reshape(masked_lm_weights, [-1])
         masked_lm_accuracy = tf.metrics.accuracy(
             labels=masked_lm_ids,
             predictions=masked_lm_predictions,
             weights=masked_lm_weights)
+
+        # masked_lm_example_loss:[batch_size*mask_num,]
         masked_lm_mean_loss = tf.metrics.mean(
             values=masked_lm_example_loss, weights=masked_lm_weights)
 
-        next_sentence_log_probs = tf.reshape(
-            next_sentence_log_probs, [-1, next_sentence_log_probs.shape[-1]])
-        next_sentence_predictions = tf.argmax(
-            next_sentence_log_probs, axis=-1, output_type=tf.int32)
+        # next_sentence_example_loss:[batch_size]
+        # next_sentence_log_probs:[batch_size, 2]
+        next_sentence_log_probs = tf.reshape(next_sentence_log_probs, [-1, next_sentence_log_probs.shape[-1]])
+        # next_sentence_predictions:[batch_size,]
+        next_sentence_predictions = tf.argmax(next_sentence_log_probs, axis=-1, output_type=tf.int32)
+        # next_sentence_labels:[batch_size,]
         next_sentence_labels = tf.reshape(next_sentence_labels, [-1])
         next_sentence_accuracy = tf.metrics.accuracy(
             labels=next_sentence_labels, predictions=next_sentence_predictions)
+        # next_sentence_example_loss:[batch_size]
+        # next_sentence_mean_loss:scalar
         next_sentence_mean_loss = tf.metrics.mean(values=next_sentence_example_loss)
 
         return {
@@ -226,6 +251,7 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
             "next_sentence_loss": next_sentence_mean_loss,
         }
 
+      # 左边是性能指标,右边是输入
       eval_metrics = (metric_fn, [
           masked_lm_example_loss, masked_lm_log_probs, masked_lm_ids,
           masked_lm_weights, next_sentence_example_loss,
