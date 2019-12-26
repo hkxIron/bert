@@ -99,7 +99,9 @@ class BertConfig(object):
     """Constructs a `BertConfig` from a json file of parameters."""
     with tf.gfile.GFile(json_file, "r") as reader:
       text = reader.read()
-    return cls.from_dict(json.loads(text)) # 调用类的from_dict静态方法
+    loaded_json = json.loads(text)
+    print("loaded_json", loaded_json)
+    return cls.from_dict(loaded_json) # 调用类的from_dict静态方法
 
   def to_dict(self):
     """Serializes this instance to a Python dictionary."""
