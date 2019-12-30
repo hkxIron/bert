@@ -108,6 +108,7 @@ class BertModelTest(tf.test.TestCase):
           "sequence_output": model.get_sequence_output(),
           "pooled_output": model.get_pooled_output(),
           "all_encoder_layers": model.get_all_encoder_layers(),
+          "attention_mask": model.attention_mask
       }
       return outputs
 
@@ -139,6 +140,9 @@ class BertModelTest(tf.test.TestCase):
                          tf.local_variables_initializer())
       sess.run(init_op)
       output_result = sess.run(ops)
+      print("shape:", output_result["attention_mask"].shape) # batchdd_size=13
+      print("attention_mask:\n", output_result["attention_mask"])
+
       tester.check_output(output_result)
 
       self.assert_all_tensors_reachable(sess, [init_op, ops])

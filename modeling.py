@@ -23,6 +23,7 @@ import copy
 import json
 import math
 import re
+import sys
 import numpy as np
 import six
 import tensorflow as tf
@@ -221,6 +222,7 @@ class BertModel(object):
         # input_mask:[batch_size, seq_length]
         # attention_mask:[batch_size, seq_length, seq_length]
         attention_mask = create_attention_mask_from_input_mask(input_ids, input_mask)
+        self.attention_mask = attention_mask
 
         # Run the stacked transformer.
         # self.embedding_output:[batch_size, seq_length, embedding_size]
@@ -595,6 +597,22 @@ def embedding_postprocessor(input_tensor,
 def create_attention_mask_from_input_mask(from_tensor, to_mask):
   """Create 3D attention mask from a 2D tensor mask.
 
+  此函数的功能只是将 to_mask在 from_seq_length上复制了多次to_mask
+    input ids:
+     [[44 47 64]
+     [67 67  9]]
+    input mask:
+     [[1 1 0]
+     [0 1 0]]
+    attention mask:
+     [[[1. 1. 0.]
+      [1. 1. 0.]
+      [1. 1. 0.]]
+
+     [[0. 1. 0.]
+      [0. 1. 0.]
+      [0. 1. 0.]]]
+
   Args:
     from_tensor: 2D or 3D Tensor of shape [batch_size, from_seq_length, ...].
     to_mask: int32 Tensor of shape [batch_size, to_seq_length].
@@ -944,8 +962,13 @@ def transformer_model(input_tensor,
   # the GPU/CPU but may not be free on the TPU, so we want to minimize them to
   # help the optimizer.
 
+  #print_op = tf.print("attention_mask:", attention_mask)
+  #print_op = tf.print("attention_mask:", attention_mask,  output_stream=sys.stdout)
+  #tf.Print(attention_mask, [attention_mask, attention_mask.shape], first_n=2)
+
   # input_tensor:[batch_size, seq_length, hidden_size]
   # prev_output: [batch_size*seq_length, hidden_size]
+  #with tf.control_dependencies([print_op]):
   prev_output = reshape_to_2d_matrix(input_tensor)
 
   all_layer_outputs = []

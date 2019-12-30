@@ -583,9 +583,7 @@ def main(_):
         is_training=False)
 
     # estimator调用evaluate,此时会有result输出
-    result = estimator.evaluate(
-        input_fn=eval_input_fn,
-        steps=FLAGS.max_eval_steps)
+    result = estimator.evaluate(input_fn=eval_input_fn, steps=FLAGS.max_eval_steps)
 
     output_eval_file = os.path.join(FLAGS.output_dir, "eval_results.txt")
     with tf.gfile.GFile(output_eval_file, "w") as writer:
