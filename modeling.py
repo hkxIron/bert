@@ -852,8 +852,8 @@ def attention_layer(from_tensor,
   # `context_layer` = [B, N, F, H]
   context_layer = tf.matmul(attention_probs, value_layer)
 
-  #context_layer:[batch_size, num_attention_heads, from_seq_length, size_per_head], 即加权平均的向量
-  # => context_layer:[batch_size,  from_seq_length, num_attention_heads, size_per_head], 即加权平均的向量
+  #    context_layer:[batch_size, num_attention_heads, from_seq_length, size_per_head], 即加权平均的向量
+  # => context_layer:[batch_size, from_seq_length, num_attention_heads, size_per_head], 即加权平均的向量
   # `context_layer` = [B, F, N, H]
   context_layer = tf.transpose(context_layer, [0, 2, 1, 3])
 
@@ -949,6 +949,7 @@ def transformer_model(input_tensor,
   prev_output = reshape_to_2d_matrix(input_tensor)
 
   all_layer_outputs = []
+  # bert base有12层,bert large有24层
   for layer_idx in range(num_hidden_layers):# 即transformer有多少层encoder组成
     with tf.variable_scope("layer_%d" % layer_idx):
       # layer_input:[batch_size*seq_length, hidden_size]
@@ -975,10 +976,10 @@ def transformer_model(input_tensor,
               from_seq_length=seq_length,
               to_seq_length=seq_length)
 
-          attention_heads.append(attention_head)
+          attention_heads.append(attention_head) # 这里只append了一次,应该len=1吧
 
         attention_output = None
-        if len(attention_heads) == 1:
+        if len(attention_heads) == 1: # 一般len=1
           # attention_output:[batch_size*from_seq_length, num_attention_heads*attention_head_size]
           attention_output = attention_heads[0]
         else:
@@ -993,19 +994,22 @@ def transformer_model(input_tensor,
         # with `layer_input`.
         with tf.variable_scope("output"):
           # 2. residual+norm
+          # attention_output:[batch_size*from_seq_length, num_attention_heads*attention_head_size]
+          # w:[num_attention_heads*attention_head_size, hidden_size]
           # attention_output:[batch_size*from_seq_length, hidden_size]
           attention_output = tf.layers.dense(
               attention_output,
               units=hidden_size,
               kernel_initializer=create_initializer(initializer_range))
           # attention_output:[batch_size*from_seq_length, hidden_size]
-          attention_output = dropout(attention_output, hidden_dropout_prob)
-          attention_output = layer_norm(attention_output + layer_input) # 进行layer normalization
+          attention_output = dropout(attention_output, hidden_dropout_prob) # dropout
+          attention_output = layer_norm(attention_output + layer_input) # 进行layer normalization + residual
 
       # 3.feed_forward,注意,每个token单独feed-forward,相互之间没有连接
       # The activation is only applied to the "intermediate" hidden layer.
       with tf.variable_scope("intermediate"):
         # attention_output:[batch_size*from_seq_length, hidden_size]
+        # w:[hidden_size, intermediate_size]
         # intermediate_output:[batch_size*from_seq_length, intermediate_size]
         intermediate_output = tf.layers.dense(
             attention_output,
@@ -1017,6 +1021,7 @@ def transformer_model(input_tensor,
       # Down-project back to `hidden_size` then add the residual.
       with tf.variable_scope("output"):
         # intermediate_output:[batch_size*from_seq_length, intermediate_size]
+        # w:[intermediate_size, hidden_size]
         # layer_output:[batch_size*from_seq_length, hidden_size]
         layer_output = tf.layers.dense(
             intermediate_output,
