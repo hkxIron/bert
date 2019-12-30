@@ -150,8 +150,12 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
     # masked_lm_log_probs:[batch_size*mask_num, vocab_size]
     (masked_lm_loss,
      masked_lm_example_loss, masked_lm_log_probs) = get_masked_lm_output(
-         bert_config, model.get_sequence_output(), model.get_embedding_table(),
-         masked_lm_positions, masked_lm_ids, masked_lm_weights)
+         bert_config,
+         model.get_sequence_output(),
+         model.get_embedding_table(),
+         masked_lm_positions,
+         masked_lm_ids,
+         masked_lm_weights)
 
     # next_sentence_prediction
     # next_sentence_loss:scalar
@@ -167,10 +171,11 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
 
     initialized_variable_names = {}
     scaffold_fn = None
-    if init_checkpoint:
-      (assignment_map, initialized_variable_names) = modeling.get_assignment_map_from_checkpoint(tvars, init_checkpoint)
-      if use_tpu:
+    if init_checkpoint: # 从checkpoint加载模型
+      (assignment_map, initialized_variable_names) \
+          = modeling.get_assignment_map_from_checkpoint(tvars, init_checkpoint)
 
+      if use_tpu:
         def tpu_scaffold():
           tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
           return tf.train.Scaffold()
@@ -187,17 +192,18 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
       tf.logging.info("  name = %s, shape = %s%s", var.name, var.shape,
                       init_string)
 
-    output_spec = None
+    output_estimator_spec = None
     if mode == tf.estimator.ModeKeys.TRAIN:
       train_op = optimization.create_optimizer(
           total_loss, learning_rate, num_train_steps, num_warmup_steps, use_tpu)
 
       # train时没有metrics
-      output_spec = tf.contrib.tpu.TPUEstimatorSpec(
+      output_estimator_spec = tf.contrib.tpu.TPUEstimatorSpec(
           mode=mode,
           loss=total_loss,
           train_op=train_op,
           scaffold_fn=scaffold_fn)
+
     elif mode == tf.estimator.ModeKeys.EVAL:
 
       def metric_fn(masked_lm_example_loss, masked_lm_log_probs, masked_lm_ids,
@@ -210,7 +216,9 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
         # masked_lm_log_probs:[batch_size*mask_num, vocab_size]
         # masked_lm_predictions:[batch_size*mask_num]
         masked_lm_predictions = tf.argmax(
-            masked_lm_log_probs, axis=-1, output_type=tf.int32)
+            masked_lm_log_probs,
+            axis=-1,
+            output_type=tf.int32)
 
         # masked_lm_example_loss:[batch_size*mask_num,]
         masked_lm_example_loss = tf.reshape(masked_lm_example_loss, [-1])
@@ -230,7 +238,8 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
 
         # masked_lm_example_loss:[batch_size*mask_num,]
         masked_lm_mean_loss = tf.metrics.mean(
-            values=masked_lm_example_loss, weights=masked_lm_weights)
+            values=masked_lm_example_loss,
+            weights=masked_lm_weights)
 
         # next_sentence_example_loss:[batch_size]
         # next_sentence_log_probs:[batch_size, 2]
@@ -254,13 +263,17 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
 
       # 左边是性能指标,右边是输入的tensor
       eval_metrics = (metric_fn, [
-          masked_lm_example_loss, masked_lm_log_probs, masked_lm_ids,
-          masked_lm_weights, next_sentence_example_loss,
-          next_sentence_log_probs, next_sentence_labels
+          masked_lm_example_loss,
+          masked_lm_log_probs,
+          masked_lm_ids,
+          masked_lm_weights,
+          next_sentence_example_loss,
+          next_sentence_log_probs,
+          next_sentence_labels
       ])
 
       # test时有metrics
-      output_spec = tf.contrib.tpu.TPUEstimatorSpec(
+      output_estimator_spec = tf.contrib.tpu.TPUEstimatorSpec(
           mode=mode,
           loss=total_loss,
           eval_metrics=eval_metrics,
@@ -268,7 +281,7 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
     else:
       raise ValueError("Only TRAIN and EVAL modes are supported: %s" % (mode))
 
-    return output_spec
+    return output_estimator_spec
 
   return model_fn
 
@@ -287,14 +300,16 @@ def get_masked_lm_output(bert_config, input_tensor, output_weights, positions,
     # This matrix is not used after pre-training.
     with tf.variable_scope("transform"):
       # 在输出之前添加一个非线性变换，只在预训练阶段起作用
-      # new input_tensor:[batch_size, seq_length, hidden_size]
+      # new input_tensor:[batch_size*mask, hidden_size]
       input_tensor = tf.layers.dense(
           input_tensor,
           units=bert_config.hidden_size,
           activation=modeling.get_activation(bert_config.hidden_act),
           kernel_initializer=modeling.create_initializer(bert_config.initializer_range))
-      # new input_tensor:[batch_size, seq_length, hidden_size]
+      # new input_tensor:[batch_size*mask, hidden_size]
       input_tensor = modeling.layer_norm(input_tensor)
+
+    tf.logging.info("input tensor shape after transform:{}".format(input_tensor.shape))
 
     # The output weights are the same as the input embeddings, but there is
     # an output-only bias for each token.
@@ -320,8 +335,7 @@ def get_masked_lm_output(bert_config, input_tensor, output_weights, positions,
     label_weights = tf.reshape(label_weights, [-1])
 
     # one_hot_labels:[batch_size*mask_num, vocab_size]
-    one_hot_labels = tf.one_hot(
-        label_ids, depth=bert_config.vocab_size, dtype=tf.float32)
+    one_hot_labels = tf.one_hot(label_ids, depth=bert_config.vocab_size, dtype=tf.float32)
 
     # The `positions` tensor might be zero-padded (if the sequence is too
     # short to have the maximum number of predictions). The `label_weights`
@@ -383,11 +397,12 @@ def get_next_sentence_output(bert_config, input_tensor, labels):
 def gather_indexes(sequence_tensor, positions):
   """Gathers the vectors at the specific positions over a minibatch."""
   # sequence_tensor:[batch_size, seq_length, width=hidden_size]
-  # positions:[batch_size, mask_num]
+  # positions:[batch_size, mask_num] = [8,20]
   sequence_shape = modeling.get_shape_list(sequence_tensor, expected_rank=3)
   batch_size = sequence_shape[0]
   seq_length = sequence_shape[1]
   width = sequence_shape[2] # = hidden_size
+
 
   # [0, 1, 2, 3, 4],seq_length=10 => [0, 10, 20, 30, 40]
   # flat_offsets:[batch_size, 1]
@@ -403,9 +418,9 @@ def gather_indexes(sequence_tensor, positions):
                                     [batch_size * seq_length, width])
   # flat_sequence_tensor: [batch_size*seq_length, width]
   # flat_offsets: [batch_size*mask_num,]
-  # output_tensor: [batch_size*mask, width]
+  # output_tensor: [batch_size*mask, width=hidden_size]
   output_tensor = tf.gather(flat_sequence_tensor, flat_positions)
-  tf.logging.info("output tensor format:{}".format(output_tensor.shape))
+  tf.logging.info("positions shape:{}, output tensor shape:{}".format(positions.shape, output_tensor.shape))
   return output_tensor
 
 
@@ -525,6 +540,7 @@ def main(_):
           num_shards=FLAGS.num_tpu_cores,
           per_host_input_for_training=is_per_host))
 
+  # create model
   model_fn = model_fn_builder(
       bert_config=bert_config,
       init_checkpoint=FLAGS.init_checkpoint,
@@ -552,7 +568,9 @@ def main(_):
         max_seq_length=FLAGS.max_seq_length,
         max_predictions_per_seq=FLAGS.max_predictions_per_seq,
         is_training=True)
-    estimator.train(input_fn=train_input_fn, max_steps=FLAGS.num_train_steps)
+    # estimator调用train
+    estimator.train(input_fn=train_input_fn,
+                    max_steps=FLAGS.num_train_steps)
 
   if FLAGS.do_eval:
     tf.logging.info("***** Running evaluation *****")
@@ -564,8 +582,10 @@ def main(_):
         max_predictions_per_seq=FLAGS.max_predictions_per_seq,
         is_training=False)
 
+    # estimator调用evaluate,此时会有result输出
     result = estimator.evaluate(
-        input_fn=eval_input_fn, steps=FLAGS.max_eval_steps)
+        input_fn=eval_input_fn,
+        steps=FLAGS.max_eval_steps)
 
     output_eval_file = os.path.join(FLAGS.output_dir, "eval_results.txt")
     with tf.gfile.GFile(output_eval_file, "w") as writer:
@@ -574,6 +594,15 @@ def main(_):
         tf.logging.info("  %s = %s", key, str(result[key]))
         writer.write("%s = %s\n" % (key, str(result[key])))
 
+    """
+    INFO:tensorflow:***** Eval results *****
+    INFO:tensorflow:  global_step = 2
+    INFO:tensorflow:  loss = 0.0
+    INFO:tensorflow:  masked_lm_accuracy = 0.0
+    INFO:tensorflow:  masked_lm_loss = 0.0
+    INFO:tensorflow:  next_sentence_accuracy = 0.0
+    INFO:tensorflow:  next_sentence_loss = 0.0
+    """
 
 if __name__ == "__main__":
   flags.mark_flag_as_required("input_file")

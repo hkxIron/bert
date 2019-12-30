@@ -186,7 +186,7 @@ class BertModel(object):
     with tf.variable_scope(scope, default_name="bert"):
       with tf.variable_scope("embeddings"):
         # Perform embedding lookup on the word ids.
-        # embedding_output:[batch_size, seq_length, embedding_size]
+        # embedding_output:[batch_size, seq_length, 1*embedding_size]
         # embedding_table: [vocab_size, embedding_size]
         (self.embedding_output, self.embedding_table) = embedding_lookup(
             input_ids=input_ids, # [batch, seq_length]
@@ -198,6 +198,7 @@ class BertModel(object):
 
         # Add positional embeddings and token type embeddings, then layer
         # normalize and perform dropout.
+        #
         # input embedding_output:[batch_size, seq_length, embedding_size]
         # output embedding_output:[batch_size, seq_length, embedding_size]
         self.embedding_output = embedding_postprocessor(
@@ -222,6 +223,7 @@ class BertModel(object):
         attention_mask = create_attention_mask_from_input_mask(input_ids, input_mask)
 
         # Run the stacked transformer.
+        # self.embedding_output:[batch_size, seq_length, embedding_size]
         # attention_mask:[batch_size, seq_length, seq_length]
         # `sequence_output` shape = [batch_size, seq_length, hidden_size].
         # all_encoder_layers: list of encoder layers of shape: [batch_size, seq_length, hidden_size]
@@ -351,11 +353,12 @@ def get_assignment_map_from_checkpoint(tvars, init_checkpoint):
   name_to_variable = collections.OrderedDict()
   for var in tvars:
     name = var.name
-    m = re.match("^(.*):\\d+$", name)
+    m = re.match("^(.*):\\d+$", name) #  bert/encoder/layer_4/output/dense/kernel:0
     if m is not None:
       name = m.group(1)
     name_to_variable[name] = var
 
+  # 从checkpoint中恢复变量
   init_vars = tf.train.list_variables(init_checkpoint)
 
   assignment_map = collections.OrderedDict()
@@ -364,7 +367,7 @@ def get_assignment_map_from_checkpoint(tvars, init_checkpoint):
     if name not in name_to_variable:
       continue
     assignment_map[name] = name
-    initialized_variable_names[name] = 1
+    initialized_variable_names[name] = 1 # 对于成功初始化的赋值为1
     initialized_variable_names[name + ":0"] = 1
 
   return (assignment_map, initialized_variable_names)
@@ -428,8 +431,7 @@ def embedding_lookup(input_ids,
   Returns:
     float Tensor of shape [batch_size, seq_length, embedding_size].
   """
-  # This function assumes that the input is of shape [batch_size, seq_length,
-  # num_inputs].
+  # This function assumes that the input is of shape [batch_size, seq_length, num_inputs].
   #
   # If the input is a 2D tensor of shape [batch_size, seq_length], we
   # reshape to [batch_size, seq_length, num_inputs=1].
@@ -448,6 +450,7 @@ def embedding_lookup(input_ids,
   # flat_input_ids:[batch*seq_length, num_inputs=1]
   flat_input_ids = tf.reshape(input_ids, [-1])
   if use_one_hot_embeddings:
+    # flat_input_ids:[batch*seq_length, num_inputs=1]
     # one_hot_input_ids:[batch*seq_length, num_inputs, vocab_size]
     one_hot_input_ids = tf.one_hot(flat_input_ids, depth=vocab_size)
     # one_hot_input_ids:[batch*seq_length, vocab_size]
@@ -511,7 +514,7 @@ def embedding_postprocessor(input_tensor,
   input_shape = get_shape_list(input_tensor, expected_rank=3)
   batch_size = input_shape[0]
   seq_length = input_shape[1]
-  width = input_shape[2]
+  embedding_size = input_shape[2]
 
   output = input_tensor
 
@@ -522,22 +525,26 @@ def embedding_postprocessor(input_tensor,
     # token_type_table: [token_type_vocab_size, width]
     token_type_table = tf.get_variable(
         name=token_type_embedding_name,
-        shape=[token_type_vocab_size, width], # width与word embedding的维度一样
+        shape=[token_type_vocab_size, embedding_size], # width与word embedding的维度一样
         initializer=create_initializer(initializer_range))
+
     # This vocab will be small so we always do one-hot here, since it is always
     # faster for a small vocabulary.
     # token_type_ids:[batch, seq_length]
     # flat_token_type_ids:[batch*seq_length, -1]
     flat_token_type_ids = tf.reshape(token_type_ids, [-1]) # [batch_size, seq_length]
+
     # one_hot_ids:[batch_size*seq_length, token_type_vocab_size]
     one_hot_ids = tf.one_hot(flat_token_type_ids, depth=token_type_vocab_size)
+
     # one_hot_ids:[batch_size*seq_length, token_type_vocab_size]
     # token_type_table: [token_type_vocab_size, width]
     # token_type_embeddings:[batch*seq_length, width]
     token_type_embeddings = tf.matmul(one_hot_ids, token_type_table)
+
     # token_type_embeddings:[batch, seq_length, width]
     token_type_embeddings = tf.reshape(token_type_embeddings,
-                                       [batch_size, seq_length, width])
+                                       shape=[batch_size, seq_length, embedding_size])
     # 加到原来的embedding上去
     # output:[batch, seq_length, width]
     output += token_type_embeddings
@@ -545,10 +552,10 @@ def embedding_postprocessor(input_tensor,
   if use_position_embeddings:
     assert_op = tf.assert_less_equal(seq_length, max_position_embeddings)
     with tf.control_dependencies([assert_op]):
-      # [max_position_embeddings, width]
+      # [max_position_embeddings, embed_size]
       full_position_embeddings = tf.get_variable(
           name=position_embedding_name,
-          shape=[max_position_embeddings, width],
+          shape=[max_position_embeddings, embedding_size],
           initializer=create_initializer(initializer_range))
       # Since the position embedding table is a learned variable, we create it
       # using a (long) sequence length `max_position_embeddings`. The actual
@@ -560,11 +567,12 @@ def embedding_postprocessor(input_tensor,
       # sequence has positions [0, 1, 2, ... seq_length-1], so we can just
       # perform a slice.
 
-      # full_position_embeddings: [max_position_embeddings, width]
-      # position_embeddings: [seq_length, width]
-      position_embeddings = tf.slice(full_position_embeddings, begin=[0, 0],
-                                     size=[seq_length, -1])
-      # output:[batch, seq_length, width]
+      # full_position_embeddings: [max_position_embeddings, embed_size]
+      # position_embeddings: [seq_length, embed_size]
+      position_embeddings = tf.slice(full_position_embeddings,
+                                     begin=[0, 0],
+                                     size=[seq_length, -1]) # seq_length是一个动态的shape,会随着样本的长度变化而变化
+      # output:[batch, seq_length, embed_size]
       num_dims = len(output.shape.as_list())
 
       # Only the last two dimensions are relevant (`seq_length` and `width`), so
@@ -574,10 +582,10 @@ def embedding_postprocessor(input_tensor,
       for _ in range(num_dims - 2):
         position_broadcast_shape.append(1)
 
-      position_broadcast_shape.extend([seq_length, width]) # [batch=1, seq_length, width]
+      position_broadcast_shape.extend([seq_length, embedding_size]) # [batch=1, seq_length, embed_size]
       position_embeddings = tf.reshape(position_embeddings,
                                        position_broadcast_shape)
-      # output:[batch, seq_length, width]
+      # output:[batch, seq_length, width=embed_size]
       output += position_embeddings
 
   output = layer_norm_and_dropout(output, dropout_prob)
@@ -694,19 +702,24 @@ def attention_layer(from_tensor,
     ValueError: Any of the arguments or tensor shapes are invalid.
   """
 
-  def transpose_for_scores(input_tensor, batch_size, num_attention_heads,
-                           seq_length, width):
-    # input_tensor: [batch_size*seq_length, num_attention_heads*size_per_head]
-    # output_tensor: [batch_size,seq_length, num_attention_heads,size_per_head]
+  def transpose_for_scores(input_tensor,
+                           batch_size,
+                           num_attention_heads,
+                           seq_length,
+                           width):
+    # input_tensor : [batch_size *seq_length, num_attention_heads *size_per_head]
+    # output_tensor: [batch_size, seq_length, num_attention_heads, size_per_head]
     output_tensor = tf.reshape(
-        input_tensor, [batch_size, seq_length, num_attention_heads, width])
+        input_tensor,
+        [batch_size, seq_length, num_attention_heads, width])
 
     # output_tensor: [batch_size, num_attention_heads, seq_length, size_per_head]
     output_tensor = tf.transpose(output_tensor, [0, 2, 1, 3])
     return output_tensor
 
-  # from_tensor: [batch_size, from_seq_length, from_width].
-  # to_tensor: [batch_size, to_seq_length, to_width]
+
+  # from_tensor: [batch_size, from_seq_length, from_width], 或者:[batch_size*from_seq_length, from_width].既可以是2d也可以是3d
+  # to_tensor: [batch_size, to_seq_length, to_width], 或者:[batch_size*to_seq_length, to_width]
   from_shape = get_shape_list(from_tensor, expected_rank=[2, 3])
   to_shape = get_shape_list(to_tensor, expected_rank=[2, 3])
 
@@ -732,18 +745,19 @@ def attention_layer(from_tensor,
   #   H = `size_per_head`
 
   # from_tensor: [batch_size, from_seq_length, from_width].
-  # from_tensor_2d:[batch_size*from_seq_length, from_width]
-  from_tensor_2d = reshape_to_2d_matrix(from_tensor)
+  # from_tensor_2d: [batch_size*from_seq_length, from_width]
+  from_tensor_2d = reshape_to_2d_matrix(from_tensor) # 统一将3d tensor转为2d
   # to_tensor: [batch_size, to_seq_length, to_width]
-  # to_tensor_2d:[batch_size*to_seq_length, to_width]
+  # to_tensor_2d: [batch_size*to_seq_length, to_width]
   to_tensor_2d = reshape_to_2d_matrix(to_tensor)
 
   # from_tensor_2d: [batch_size*from_seq_length, from_width]
+  # W: [from_width, num_attention_heads*size_per_head], 注意:多头attention在这里用矩阵相乘实现的
   # query_layer: [batch_size*from_seq_length, num_attention_heads*size_per_head]
   # `query_layer` = [B*F, N*H]
   query_layer = tf.layers.dense(
       from_tensor_2d,
-      units = num_attention_heads * size_per_head, #多头attention, 每个attention向量最内层的维度
+      units = num_attention_heads * size_per_head, # 多头attention, 每个attention向量最内层的维度
       activation=query_act, # 激活函数
       name="query",
       kernel_initializer=create_initializer(initializer_range))
@@ -759,7 +773,7 @@ def attention_layer(from_tensor,
       kernel_initializer=create_initializer(initializer_range))
 
   # to_tensor_2d: [batch_size*to_seq_length, from_width]
-  # value_layer: [batch_size*to_seq_length, num_attention_heads*size_per_head]
+  # value_layer:  [batch_size*to_seq_length, num_attention_heads*size_per_head]
   # `value_layer` = [B*T, N*H]
   value_layer = tf.layers.dense(
       to_tensor_2d,
@@ -768,25 +782,30 @@ def attention_layer(from_tensor,
       name="value",
       kernel_initializer=create_initializer(initializer_range))
 
-  # input query_layer: [batch_size*from_seq_length, num_attention_heads*size_per_head]
+  # input query_layer:  [batch_size*from_seq_length, num_attention_heads*size_per_head]
   # output query_layer: [batch_size, num_attention_heads, from_seq_length, size_per_head]
   # `query_layer` = [B, N, F, H]
-  query_layer = transpose_for_scores(query_layer, batch_size,
-                                     num_attention_heads, from_seq_length,
+  query_layer = transpose_for_scores(query_layer,
+                                     batch_size,
+                                     num_attention_heads,
+                                     from_seq_length,
                                      size_per_head)
 
   # `key_layer` = [B, N, T, H]
   # output key_layer: [batch_size, num_attention_heads, to_seq_length, size_per_head]
-  key_layer = transpose_for_scores(key_layer, batch_size, num_attention_heads,
-                                   to_seq_length, size_per_head)
+  key_layer = transpose_for_scores(key_layer,
+                                   batch_size,
+                                   num_attention_heads,
+                                   to_seq_length,
+                                   size_per_head)
 
-  # Take the dot product between "query" and "key" to get the raw
-  # attention scores.
+  # Take the dot product between "query" and "key" to get the raw attention scores.
   # `attention_scores` = [B, N, F, T]
-  # query_layer: [batch_size, num_attention_heads, from_seq_length, size_per_head]
-  # key_layer:   [batch_size, num_attention_heads, to_seq_length, size_per_head]
-  # atten_scores:[batch_size, num_attention_heads, from_seq_length, to_seq_length]
-  attention_scores = tf.matmul(query_layer, key_layer, transpose_b=True)
+  # query_layer: [batch_size, num_attention_heads, from_seq_length, size_per_head=hidden_dim]
+  # key_layer:   [batch_size, num_attention_heads, to_seq_length,   size_per_head=hidden_dim]
+  # atten_scores:[batch_size, num_attention_heads, from_seq_length, to_seq_length], query的每一位对key的每一位进行attention
+  attention_scores = tf.matmul(query_layer, key_layer, transpose_b=True) # 用矩阵最低两维相乘要match, 其它的axis上要相等
+  # ||k*x|| = sqrt(k)*||x||
   # atten_scores:[batch_size, num_attention_heads, from_seq_length, to_seq_length], 除以长度归一化
   attention_scores = tf.multiply(attention_scores, 1.0 / math.sqrt(float(size_per_head)))
 
@@ -800,7 +819,7 @@ def attention_layer(from_tensor,
     # masked positions, this operation will create a tensor which is 0.0 for
     # positions we want to attend and -10000.0 for masked positions.
     negative_num = -10000.0
-    mask_adder = (1.0 - tf.cast(attention_mask, tf.float32)) * negative_num
+    mask_adder = (1.0 - tf.cast(attention_mask, tf.float32)) * negative_num # 对mask=0的地方减去一个比较大的值,让softmax后概率为0
 
     # Since we are adding it to the raw scores before the softmax, this is
     # effectively the same as removing these entirely.
@@ -810,11 +829,11 @@ def attention_layer(from_tensor,
   # Normalize the attention scores to probabilities.
   # `attention_probs` = [B, N, F, T]
   # atten_probs:[batch_size, num_attention_heads, from_seq_length, to_seq_length]
-  attention_probs = tf.nn.softmax(attention_scores, axis=-1)
+  attention_probs = tf.nn.softmax(attention_scores, axis=-1) # 在to_seq_length 这一维度进行分数归一化,即from的每个词每个to词都算一个概率分布
 
   # This is actually dropping out entire tokens to attend to, which might
   # seem a bit unusual, but is taken from the original Transformer paper.
-  # atten_probs:[batch_size, num_attention_heads, from_seq_length, to_seq_length]
+  # attention_probs:[batch_size, num_attention_heads, from_seq_length, to_seq_length]
   attention_probs = dropout(attention_probs, attention_probs_dropout_prob)
 
   # `value_layer` = [B, T, N, H]
@@ -827,9 +846,9 @@ def attention_layer(from_tensor,
   # `value_layer` = [B, N, T, H]
   value_layer = tf.transpose(value_layer, [0, 2, 1, 3])
 
-  # atten_probs: [batch_size, num_attention_heads, from_seq_length, to_seq_length]
-  # value_layer: [batch_size, num_attention_heads, to_seq_length, size_per_head]
-  #context_layer:[batch_size, num_attention_heads, from_seq_length, size_per_head], 即加权平均的向量
+  # atten_probs:  [batch_size, num_attention_heads, from_seq_length, to_seq_length], query与key交互得到atten_score
+  # value_layer:  [batch_size, num_attention_heads, to_seq_length,   size_per_head=hidden_dim]
+  # context_layer:[batch_size, num_attention_heads, from_seq_length, size_per_head=hidden_dim], 即加权平均后的向量
   # `context_layer` = [B, N, F, H]
   context_layer = tf.matmul(attention_probs, value_layer)
 
@@ -912,7 +931,7 @@ def transformer_model(input_tensor,
   input_shape = get_shape_list(input_tensor, expected_rank=3)
   batch_size = input_shape[0]
   seq_length = input_shape[1]
-  input_width = input_shape[2]
+  input_width = input_shape[2] # embedding_size
 
   # The Transformer performs sum residuals on all layers so the input needs
   # to be the same as the hidden size.
@@ -926,19 +945,21 @@ def transformer_model(input_tensor,
   # help the optimizer.
 
   # input_tensor:[batch_size, seq_length, hidden_size]
+  # prev_output: [batch_size*seq_length, hidden_size]
   prev_output = reshape_to_2d_matrix(input_tensor)
 
   all_layer_outputs = []
   for layer_idx in range(num_hidden_layers):# 即transformer有多少层encoder组成
     with tf.variable_scope("layer_%d" % layer_idx):
-      # layer_input:[batch_size, seq_length, hidden_size]
+      # layer_input:[batch_size*seq_length, hidden_size]
       layer_input = prev_output
+      print("layer input shape:{}".format(layer_input.shape)) # shape:[450, 10]
 
       # 1. self-attention
       with tf.variable_scope("attention"):
         attention_heads = []
         with tf.variable_scope("self"):
-          # layer_input:[batch_size, seq_length, hidden_size]
+          # layer_input:[batch_size*seq_length, hidden_size]
           # attention_mask: [batch_size, seq_length, seq_length]
           # attention_head:[batch_size*from_seq_length, num_attention_heads*attention_head_size]
           attention_head = attention_layer(
@@ -1051,9 +1072,11 @@ def get_shape_list(tensor, expected_rank=None, name=None):
     if dim is None: # tensorflow中动态的维度,比如batch的维度=none, session run时才能确定
       non_static_indexes.append(index)
 
+  # 如果全是静态图,直接返回shape
   if not non_static_indexes:
     return shape
 
+  # 如果是动态图,用tf.shape
   dyn_shape = tf.shape(tensor)
   for index in non_static_indexes: # 动态shape
     shape[index] = dyn_shape[index]
@@ -1074,14 +1097,14 @@ def reshape_to_2d_matrix(input_tensor):
   return output_tensor
 
 
-def reshape_from_2d_matrix(output_tensor, orig_shape_list):
+def reshape_from_2d_matrix(output_tensor, origin_shape_list):
   """Reshapes a rank 2 tensor back to its original rank >= 2 tensor."""
-  if len(orig_shape_list) == 2:
+  if len(origin_shape_list) == 2:
     return output_tensor
 
   output_shape = get_shape_list(output_tensor)
 
-  orig_dims = orig_shape_list[0:-1]
+  orig_dims = origin_shape_list[0:-1]
   width = output_shape[-1]
 
   return tf.reshape(output_tensor, orig_dims + [width])
