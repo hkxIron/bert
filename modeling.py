@@ -256,9 +256,11 @@ class BertModel(object):
         # sequence_output:[batch_size, seq_length, hidden_size]
         # first_token_tensor:[batch_size, 1, hidden_size], 只取第一个token的向量
         # after squeeze, first_token_tensor:[batch_size, hidden_size]
-        first_token_tensor = tf.squeeze(self.sequence_output[:, 0:1, :], axis=1)
+        first_token_tensor = tf.squeeze(self.sequence_output[:, 0:1, :], axis=1) # 只取第一个token的向量,即CLS的向量
+
+        # w:[hidden_size, hidden_size]
         # pooled_output:[batch_size, hidden_size], bert只取每个句子里的第一个token的向量
-        self.pooled_output = tf.layers.dense(
+        self.pooled_output = tf.layers.dense( # 乘以w矩阵是为了转换语义空间
             first_token_tensor,
             config.hidden_size, # 768
             activation=tf.tanh,
@@ -1058,6 +1060,7 @@ def transformer_model(input_tensor,
         prev_output = layer_output
         # all_layers_outputs: list of [batch_size*from_seq_length, hidden_size]
         all_layer_outputs.append(layer_output)
+  # for, 多层encoder结束
 
   if do_return_all_layers: # 返回all_layers
     final_outputs = []
@@ -1067,7 +1070,7 @@ def transformer_model(input_tensor,
       # list of final_output:[batch_size, seq_length, hidden_size]
       final_outputs.append(final_output)
     return final_outputs
-  else: # 只返最后一层
+  else: # 默认只返最后一层
     # layer_output:[batch_size, from_seq_length, hidden_size]
     final_output = reshape_from_2d_matrix(prev_output, input_shape)
     return final_output

@@ -151,7 +151,7 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
     (masked_lm_loss,
      masked_lm_example_loss, masked_lm_log_probs) = get_masked_lm_output(
          bert_config,
-         model.get_sequence_output(),
+         model.get_sequence_output(), # sequence_output:[batch_size, seq_length, hidden_size], 只取最后一层
          model.get_embedding_table(),
          masked_lm_positions,
          masked_lm_ids,
@@ -300,7 +300,7 @@ def get_masked_lm_output(bert_config, input_tensor, output_weights, positions,
     # This matrix is not used after pre-training.
     with tf.variable_scope("transform"):
       # 在输出之前添加一个非线性变换，只在预训练阶段起作用
-      # new input_tensor:[batch_size*mask, hidden_size]
+      # new input_tensor:[batch_size*mask_num, hidden_size]
       input_tensor = tf.layers.dense(
           input_tensor,
           units=bert_config.hidden_size,
@@ -345,7 +345,7 @@ def get_masked_lm_output(bert_config, input_tensor, output_weights, positions,
     # log_probs:[batch_size*mask_num, vocab_size]
     # one_hot_labels:[batch_size*mask_num, vocab_size]
     # per_example_loss:[batch_size*mask,]
-    per_example_loss = -tf.reduce_sum(log_probs * one_hot_labels, axis=[-1])
+    per_example_loss = -tf.reduce_sum(log_probs * one_hot_labels, axis=[-1]) # cross-entropy loss
     # 乘以样本权重
     #label_weights:[batch_size*mask, 1]
     numerator = tf.reduce_sum(label_weights * per_example_loss)
@@ -406,8 +406,7 @@ def gather_indexes(sequence_tensor, positions):
 
   # [0, 1, 2, 3, 4],seq_length=10 => [0, 10, 20, 30, 40]
   # flat_offsets:[batch_size, 1]
-  flat_offsets = tf.reshape(
-      tf.range(0, limit=batch_size, dtype=tf.int32) * seq_length, [-1, 1])
+  flat_offsets = tf.reshape(tf.range(0, limit=batch_size, dtype=tf.int32) * seq_length, [-1, 1])
   # positions:[batch_size, mask_num]
   # flat_offsets:[batch_size, 1]
   # new flat_offsets:[batch_size*mask_num,]
@@ -417,9 +416,9 @@ def gather_indexes(sequence_tensor, positions):
   flat_sequence_tensor = tf.reshape(sequence_tensor,
                                     [batch_size * seq_length, width])
   # flat_sequence_tensor: [batch_size*seq_length, width]
-  # flat_offsets: [batch_size*mask_num,]
-  # output_tensor: [batch_size*mask, width=hidden_size]
-  output_tensor = tf.gather(flat_sequence_tensor, flat_positions)
+  # flat_offsets: [batch_size*mask_num]
+  # output_tensor: [batch_size*mask_num, width=hidden_size]
+  output_tensor = tf.gather(flat_sequence_tensor, flat_positions) # 只取mask=1位置的那些token embedding,
   tf.logging.info("positions shape:{}, output tensor shape:{}".format(positions.shape, output_tensor.shape))
   return output_tensor
 
