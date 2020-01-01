@@ -370,7 +370,7 @@ def get_assignment_map_from_checkpoint(tvars, init_checkpoint):
     (name, var) = (x[0], x[1])
     if name not in name_to_variable:
       continue
-    assignment_map[name] = name
+    assignment_map[name] = name # assignment_map作用是将新模型与checkpoint中的var tensor对应起来,以便后面初始化模型
     initialized_variable_names[name] = 1 # 对于成功初始化的赋值为1
     initialized_variable_names[name + ":0"] = 1
 

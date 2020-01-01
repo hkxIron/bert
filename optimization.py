@@ -50,8 +50,7 @@ def create_optimizer(loss, init_lr, num_train_steps, num_warmup_steps, use_tpu):
     warmup_learning_rate = init_lr * warmup_percent_done
 
     is_warmup = tf.cast(global_steps_int < warmup_steps_int, tf.float32)
-    learning_rate = (
-        (1.0 - is_warmup) * learning_rate + is_warmup * warmup_learning_rate)
+    learning_rate = ((1.0 - is_warmup) * learning_rate + is_warmup * warmup_learning_rate)
 
   # It is recommended that you use this optimizer for fine tuning, since this
   # is how the model was trained (note that the Adam m/v variables are NOT
@@ -62,7 +61,7 @@ def create_optimizer(loss, init_lr, num_train_steps, num_warmup_steps, use_tpu):
       beta_1=0.9,
       beta_2=0.999,
       epsilon=1e-6,
-      exclude_from_weight_decay=["LayerNorm", "layer_norm", "bias"])
+      exclude_from_weight_decay=["LayerNorm", "layer_norm", "bias"]) # layer norm不需要weight decay
 
   if use_tpu:
     optimizer = tf.contrib.tpu.CrossShardOptimizer(optimizer)
@@ -73,8 +72,7 @@ def create_optimizer(loss, init_lr, num_train_steps, num_warmup_steps, use_tpu):
   # This is how the model was pre-trained.
   (grads, _) = tf.clip_by_global_norm(grads, clip_norm=1.0)
 
-  train_op = optimizer.apply_gradients(
-      zip(grads, tvars), global_step=global_step)
+  train_op = optimizer.apply_gradients(zip(grads, tvars), global_step=global_step)
 
   # Normally the global step update is done inside of `apply_gradients`.
   # However, `AdamWeightDecayOptimizer` doesn't do this. But if you use
@@ -85,7 +83,29 @@ def create_optimizer(loss, init_lr, num_train_steps, num_warmup_steps, use_tpu):
 
 
 class AdamWeightDecayOptimizer(tf.train.Optimizer):
-  """A basic Adam optimizer that includes "correct" L2 weight decay."""
+  """A basic Adam optimizer that includes "correct" L2 weight decay.
+
+basic:
+first_moment =0
+second_moment =0
+for t in range(1, num_iter):
+	dx = compute_gradient(x)
+	first_moment = beta1 * first_moment + (1-beta1)*dx
+	second_moment = beta1 * second_moment + (1-beta2)*dx*dx
+	x -= learning_rate * first_moment / (np.sqrt(second_moment) + 1e-7))
+
+
+full:
+first_moment =0
+second_moment =0
+for t in range(1, num_iter):
+	dx = compute_gradient(x)
+	first_moment = beta1 * first_moment + (1-beta1)*dx
+	second_moment = beta1 * second_moment + (1-beta2)*dx*dx
+	first_unbias = first_moment / (1-beta1**t)
+	second_unbias = second_moment / (1-beta2**t)
+	x -= learning_rate * first_unbias / (np.sqrt(second_unbias) + 1e-7))
+  """
 
   def __init__(self,
                learning_rate,
@@ -113,7 +133,7 @@ class AdamWeightDecayOptimizer(tf.train.Optimizer):
         continue
 
       param_name = self._get_variable_name(param.name)
-
+      # 每个变量都有一个adam变量跟踪它
       m = tf.get_variable(
           name=param_name + "/adam_m",
           shape=param.shape.as_list(),
@@ -128,11 +148,8 @@ class AdamWeightDecayOptimizer(tf.train.Optimizer):
           initializer=tf.zeros_initializer())
 
       # Standard Adam update.
-      next_m = (
-          tf.multiply(self.beta_1, m) + tf.multiply(1.0 - self.beta_1, grad))
-      next_v = (
-          tf.multiply(self.beta_2, v) + tf.multiply(1.0 - self.beta_2,
-                                                    tf.square(grad)))
+      next_m = (tf.multiply(self.beta_1, m) + tf.multiply(1.0 - self.beta_1, grad))
+      next_v = (tf.multiply(self.beta_2, v) + tf.multiply(1.0 - self.beta_2, tf.square(grad)))
 
       update = next_m / (tf.sqrt(next_v) + self.epsilon)
 
@@ -150,10 +167,11 @@ class AdamWeightDecayOptimizer(tf.train.Optimizer):
 
       next_param = param - update_with_lr # 更新params
 
-      assignments.extend(
-          [param.assign(next_param),
+      # param, next_m, next_v将不会同时更新
+      assignments.extend([param.assign(next_param),
            m.assign(next_m), # 更新m
            v.assign(next_v)]) # 更新v
+
     return tf.group(*assignments, name=name)
 
   def _do_use_weight_decay(self, param_name):

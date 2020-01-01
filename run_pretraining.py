@@ -149,7 +149,8 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
     # masked_lm_example_loss:[batch_size*mask,]
     # masked_lm_log_probs:[batch_size*mask_num, vocab_size]
     (masked_lm_loss,
-     masked_lm_example_loss, masked_lm_log_probs) = get_masked_lm_output(
+     masked_lm_example_loss,
+     masked_lm_log_probs) = get_masked_lm_output(
          bert_config,
          model.get_sequence_output(), # sequence_output:[batch_size, seq_length, hidden_size], 只取最后一层
          model.get_embedding_table(),
@@ -161,14 +162,16 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
     # next_sentence_loss:scalar
     # next_sentence_example_loss:[batch_size]
     # next_sentence_log_probs:[batch_size, 2]
-    (next_sentence_loss, next_sentence_example_loss,
+    (next_sentence_loss,
+     next_sentence_example_loss,
      next_sentence_log_probs) = get_next_sentence_output(
-         bert_config, model.get_pooled_output(), next_sentence_labels)
+        bert_config,
+        model.get_pooled_output(),
+        next_sentence_labels)
 
     total_loss = masked_lm_loss + next_sentence_loss
 
     tvars = tf.trainable_variables()
-
     initialized_variable_names = {}
     scaffold_fn = None
     if init_checkpoint: # 从checkpoint加载模型
@@ -182,6 +185,7 @@ def model_fn_builder(bert_config, init_checkpoint, learning_rate,
 
         scaffold_fn = tpu_scaffold
       else:
+        # 从checkpoint中恢复出模型
         tf.train.init_from_checkpoint(init_checkpoint, assignment_map)
 
     tf.logging.info("**** Trainable Variables ****")
@@ -376,7 +380,7 @@ def get_next_sentence_output(bert_config, input_tensor, labels):
 
     # input_tensor: [batch_size,  hidden_size]
     # output_weights:[2, hidden_size]
-    # logits:[batch_size,  2]
+    # logits:[batch_size,  2], 二分类:true/false
     logits = tf.matmul(input_tensor, output_weights, transpose_b=True)
     # logits:[batch_size, 2]
     logits = tf.nn.bias_add(logits, output_bias)
@@ -554,7 +558,7 @@ def main(_):
   # or GPU.
   estimator = tf.contrib.tpu.TPUEstimator(
       use_tpu=FLAGS.use_tpu,
-      model_fn=model_fn, # 指定model
+      model_fn=model_fn, # 指定model, 输入为:features
       config=run_config,
       train_batch_size=FLAGS.train_batch_size,
       eval_batch_size=FLAGS.eval_batch_size)
@@ -582,6 +586,7 @@ def main(_):
         is_training=False)
 
     # estimator调用evaluate,此时会有result输出
+    # TODO:感觉这种训练方式有点坑啊,都不好控制多少步打印一次指标
     result = estimator.evaluate(input_fn=eval_input_fn, steps=FLAGS.max_eval_steps)
 
     output_eval_file = os.path.join(FLAGS.output_dir, "eval_results.txt")

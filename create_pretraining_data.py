@@ -69,7 +69,7 @@ dupe_factor： 重复参数，即对于同一个句子，我们可以设置不�
 为了充分利用数据，第一次可以mask成Hello [MASK], this is bert.，第二次可以变成Hello world, this is [MASK[.
 max_predictions_per_seq： 一个句子里最多有多少个[MASK]标记
 masked_lm_prob： 多少比例的Token被MASK掉
-short_seq_prob：  长度小于“max_seq_length”的样本比例。
+short_seq_prob： 长度小于“max_seq_length”的样本比例。
 因为在fine-tune过程里面输入的target_seq_length是可变的（小于等于max_seq_length），
 那么为了防止过拟合也需要在pre-train的过程当中构造一些短的样本。
 """
@@ -207,8 +207,9 @@ def create_training_instances(input_files, tokenizer, max_seq_length,
   # (2) Blank lines between documents. Document boundaries are needed so
   # that the "next sentence prediction" task doesn't span between documents.
   #
-  # all_documents是list的list，第一层list表示document，
-  # 第二层lit表示document里的多个句子。
+  # all_documents是list的list，
+  # 第一层list表示document，
+  # 第二层list表示document里的多个句子。
   for input_file in input_files:
     with tf.gfile.GFile(input_file, "r") as reader:
       while True:
@@ -231,7 +232,7 @@ def create_training_instances(input_files, tokenizer, max_seq_length,
   all_documents = [x for x in all_documents if x]
   rng.shuffle(all_documents) # 将文档的顺序打乱
 
-  # 重复dupe_factor次, 直接对文档进行重复采样
+  # 重复dupe_factor次, 直接对文档进行重复采样, 因为需要对一个文档多次随机mask并采样
   vocab_words = list(tokenizer.vocab.keys())
   instances = []
   for _ in range(dupe_factor):
