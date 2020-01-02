@@ -339,7 +339,7 @@ class WordpieceTokenizer(object):
     也就是先看看unaffable在不在词典里，如果在，那么直接作为一个WordPiece，
     如果不在，那么end-=1，也就是看unaffabl在不在词典里，最终发现”un”在词典里，把un加到结果里。
 
-    接着start=2，看affable在不在，不在再看affabl，…，
+    接着start=2,即从a开始,看##affable在不在, ##表示占位符，不在再看##affabl，…，
     最后发现 ##aff 在词典里。注意：##表示这个词是接着前面的，
     这样使得WordPiece切分是可逆的——我们可以恢复出“真正”的词。
     """
@@ -361,9 +361,9 @@ class WordpieceTokenizer(object):
         cur_substr = None
         while start < end:# 每次去掉最后的一个char去看是否在词典里
           substr = "".join(chars[start:end])
-          if start > 0:
+          if start > 0: # 如果词不是首字，则加前缀 ##
             substr = "##" + substr
-          if substr in self.vocab:
+          if substr in self.vocab: # 看词是否在词典里
             cur_substr = substr
             break
           end -= 1
